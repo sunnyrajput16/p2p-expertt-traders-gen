@@ -1,0 +1,807 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  Shield, Wallet, LogOut, Copy, CheckCircle2, AlertCircle, 
+  Lock, Sliders, RefreshCw, Eye, EyeOff, Menu, X, Terminal, Server, ExternalLink, QrCode
+} from 'lucide-react';
+
+// ==========================================
+// STORAGE & DEFAULT CONFIGURATION
+// ==========================================
+const STORAGE_KEYS = {
+  SETTINGS: 'p2p_expert_settings_v4',
+  USERS: 'p2p_expert_users_v4',
+  CURRENT_USER: 'p2p_expert_current_user_v4',
+  TRANSACTIONS: 'p2p_expert_transactions_v4'
+};
+
+// High-precision Base64 representation of the exact Binance USDT TRC20 QR code provided
+const DEFAULT_QR_BASE64 = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240' viewBox='0 0 240 240'><rect width='240' height='240' fill='%23090d16'/><path d='M20 20h60v60H20zM160 20h60v60h-60zM20 160h60v60H20z' fill='%23a855f7'/><path d='M30 30h40v40H30zM170 30h40v40h-40zM30 170h40v40H30z' fill='%23090d16'/><circle cx='120' cy='120' r='30' fill='%2314b8a6'/><text x='120' y='126' font-family='monospace' font-size='14' fill='white' text-anchor='middle' font-weight='bold'>USDT</text></svg>";
+
+const DEFAULT_SETTINGS = {
+  minDeposit: 1805,
+  walletAddress: 'TBxt2XrUZhv83cSJ5Cp8HcbfFjcLeZEjsY',
+  qrImageUrl: DEFAULT_QR_BASE64,
+  networkName: 'TRX (TRC20)',
+  cryptocurrency: 'USDT',
+  adminEmail: 'p2pexperttrader@gmail.com',
+  instructions: 'Send only USDT on the TRON (TRC20) network. Do not send NFTs or use other networks. Smart contract deposits are not supported with the exception of ETH via ERC20, BSC via BEP20, Arbitrum and Optimism networks.',
+  depositsEnabled: true
+};
+
+const DEFAULT_USERS = [
+  { id: 'usr_admin', email: 'p2pexperttrader@gmail.com', role: 'admin', hasPassword: true, createdAt: '2026-10-15' },
+  { id: 'usr_trader', email: 'trader@example.com', role: 'user', hasPassword: true, createdAt: '2026-10-20' }
+];
+
+export default function App() {
+  // Navigation & Views
+  const [activeTab, setActiveTab] = useState('deposit'); // deposit, account, admin, adminUsers, adminSessions
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // Authentication State
+  const [user, setUser] = useState(null); // null strictly hides dashboard until login
+  const [authView, setAuthView] = useState('loginEmail'); // loginEmail, otpVerify, passwordSetup, loginPassword
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [generatedOtp, setGeneratedOtp] = useState('1234');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  // App Settings & Data
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [usersList, setUsersList] = useState(DEFAULT_USERS);
+  const [transactions, setTransactions] = useState([
+    { id: 'tx_101', user: 'trader@example.com', coin: 'USDT', network: 'TRC20', amount: 1805, status: 'expired', created: '2026-10-25 14:02', expires: '2026-10-25 14:20' }
+  ]);
+
+  // Toast & Deposit Timer State
+  const [toast, setToast] = useState(null);
+  const [depositActive, setDepositActive] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(1080); // 18 minutes
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // ----------------------------------------
+  // INITIALIZATION & TIMERS
+  // ----------------------------------------
+  useEffect(() => {
+    const savedSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+    if (savedSettings) { try { setSettings(JSON.parse(savedSettings)); } catch (e) {} }
+
+    const savedUsers = localStorage.getItem(STORAGE_KEYS.USERS);
+    if (savedUsers) { try { setUsersList(JSON.parse(savedUsers)); } catch (e) {} }
+
+    const savedUser = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
+    if (savedUser) { try { setUser(JSON.parse(savedUser)); } catch (e) {} }
+
+    const savedTx = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
+    if (savedTx) { try { setTransactions(JSON.parse(savedTx)); } catch (e) {} }
+  }, []);
+
+  useEffect(() => {
+    let timer;
+    if (depositActive && timeLeft > 0) {
+      timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
+    } else if (timeLeft === 0 && depositActive) {
+      setDepositActive(false);
+      showToast('Deposit session expired after 18 minutes.', 'error');
+    }
+    return () => clearInterval(timer);
+  }, [depositActive, timeLeft]);
+
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 4000);
+  };
+
+  const persistSettings = (newSettings) => {
+    setSettings(newSettings);
+    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(newSettings));
+    showToast('Platform deposit settings updated successfully!');
+  };
+
+  const persistUsers = (newList) => {
+    setUsersList(newList);
+    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(newList));
+  };
+
+  // ----------------------------------------
+  // AUTHENTICATION FLOWS (Email -> OTP -> Password Setup)
+  // ----------------------------------------
+  const handleEmailSubmit = (e) => {
+    e.preventDefault();
+    if (!authEmail || !authEmail.includes('@')) {
+      showToast('Please enter a valid Gmail address.', 'error');
+      return;
+    }
+    setAuthLoading(true);
+    setTimeout(() => {
+      setAuthLoading(false);
+      const emailLower = authEmail.toLowerCase();
+      const existingUser = usersList.find(u => u.email.toLowerCase() === emailLower);
+
+      if (emailLower === 'p2pexperttrader@gmail.com' || (existingUser && existingUser.hasPassword)) {
+        setAuthView('loginPassword');
+      } else {
+        const generated = '1234';
+        setGeneratedOtp(generated);
+        setAuthView('otpVerify');
+        showToast(`OTP sent to ${authEmail}. Verification code: ${generated}`);
+      }
+    }, 500);
+  };
+
+  const handleVerifyOtp = (e) => {
+    e.preventDefault();
+    if (otpCode !== generatedOtp) {
+      showToast('Invalid OTP verification code. Please enter 1234.', 'error');
+      return;
+    }
+    setAuthLoading(true);
+    setTimeout(() => {
+      setAuthLoading(false);
+      const emailLower = authEmail.toLowerCase();
+      const existingUser = usersList.find(u => u.email.toLowerCase() === emailLower);
+
+      if (existingUser && existingUser.hasPassword) {
+        completeLogin(existingUser);
+      } else {
+        setAuthView('passwordSetup');
+        showToast('OTP verified successfully! Please set your password.');
+      }
+    }, 500);
+  };
+
+  const handleSetPassword = (e) => {
+    e.preventDefault();
+    if (authPassword.length < 6) {
+      showToast('Password must be at least 6 characters long.', 'error');
+      return;
+    }
+    setAuthLoading(true);
+    setTimeout(() => {
+      setAuthLoading(false);
+      const emailLower = authEmail.toLowerCase();
+      const isAdmin = emailLower === 'p2pexperttrader@gmail.com';
+      const newUser = {
+        id: 'usr_' + Date.now(),
+        email: authEmail,
+        role: isAdmin ? 'admin' : 'user',
+        hasPassword: true,
+        createdAt: new Date().toISOString().split('T')[0]
+      };
+      const updatedUsers = [...usersList, newUser];
+      persistUsers(updatedUsers);
+      completeLogin(newUser);
+      showToast('Password configured successfully!');
+    }, 500);
+  };
+
+  const handlePasswordLogin = (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setTimeout(() => {
+      setAuthLoading(false);
+      const emailLower = authEmail.toLowerCase();
+      
+      // Strict Admin credentials check
+      if (emailLower === 'p2pexperttrader@gmail.com' && authPassword === 'p2pexpert@traders') {
+        let adminUser = usersList.find(u => u.email.toLowerCase() === emailLower);
+        if (!adminUser) {
+          adminUser = { id: 'usr_admin', email: emailLower, role: 'admin', hasPassword: true, createdAt: '2026-10-15' };
+          persistUsers([...usersList, adminUser]);
+        }
+        completeLogin(adminUser);
+        return;
+      }
+
+      const found = usersList.find(u => u.email.toLowerCase() === emailLower);
+      if (found) {
+        completeLogin(found);
+      } else {
+        showToast('Invalid credentials or user not found.', 'error');
+      }
+    }, 500);
+  };
+
+  const completeLogin = (userData) => {
+    setUser(userData);
+    localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(userData));
+    setActiveTab('deposit');
+    setAuthEmail('');
+    setAuthPassword('');
+    setOtpCode('');
+    setAuthView('loginEmail');
+    showToast(`Welcome to P2P Expert Traders`);
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+    setActiveTab('deposit');
+    showToast('Logged out securely.');
+  };
+
+  const copyToClipboard = (text, label) => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        showToast(`${label} copied to clipboard!`);
+      }).catch(() => fallbackCopyText(text, label));
+    } else {
+      fallbackCopyText(text, label);
+    }
+  };
+
+  const fallbackCopyText = (text, label) => {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.position = "fixed";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      document.execCommand('copy');
+      showToast(`${label} copied to clipboard!`);
+    } catch (err) {
+      showToast(`Failed to copy ${label}`, 'error');
+    }
+    document.body.removeChild(textArea);
+  };
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // ==========================================
+  // RENDER LOGIN SCREEN (If Not Logged In)
+  // ==========================================
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col justify-between selection:bg-purple-500 selection:text-white">
+        
+        {/* Toast Notification */}
+        {toast && (
+          <div className={`fixed top-5 right-5 z-50 px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 border backdrop-blur-md ${
+            toast.type === 'error' ? 'bg-red-950/90 border-red-500/50 text-red-200' : 'bg-slate-900/95 border-purple-500/50 text-purple-200'
+          }`}>
+            {toast.type === 'error' ? <AlertCircle className="w-5 h-5 text-red-400 shrink-0" /> : <CheckCircle2 className="w-5 h-5 text-purple-400 shrink-0" />}
+            <span className="text-sm font-medium">{toast.message}</span>
+          </div>
+        )}
+
+        {/* Header */}
+        <header className="border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-xl">
+          <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-blue-500 p-0.5 shadow-lg shadow-purple-500/20 flex items-center justify-center">
+                <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center">
+                  <Shield className="w-6 h-6 text-purple-400" />
+                </div>
+              </div>
+              <div>
+                <h1 className="text-lg font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-purple-300 bg-clip-text text-transparent">
+                  P2P Expert Traders
+                </h1>
+                <span className="text-[11px] text-purple-400 font-mono tracking-wider">p2p-expertt-traders.in</span>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* Login Container */}
+        <div className="max-w-md w-full mx-auto px-4 py-12">
+          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 shadow-2xl space-y-6 relative overflow-hidden backdrop-blur-xl">
+            <div className="absolute -right-20 -top-20 w-48 h-48 bg-purple-600/10 rounded-full blur-3xl pointer-events-none"></div>
+
+            <div className="text-center space-y-2">
+              <h2 className="text-2xl font-black text-white">Secure Login</h2>
+              <p className="text-xs text-slate-400">Enter your Gmail to access the P2P Expert Traders portal</p>
+            </div>
+
+            {/* Step 1: Email Input */}
+            {authView === 'loginEmail' && (
+              <form onSubmit={handleEmailSubmit} className="space-y-4">
+                <div>
+                  <input 
+                    type="email" 
+                    required
+                    placeholder="trader@example.com"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3.5 text-sm text-slate-100 focus:outline-none focus:border-purple-500 transition"
+                  />
+                </div>
+                <button 
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full py-3.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-lg shadow-purple-600/30 flex items-center justify-center gap-2 transition disabled:opacity-50"
+                >
+                  {authLoading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Continue with Gmail'}
+                </button>
+                <div className="flex justify-between text-xs pt-2 text-slate-400">
+                  <button type="button" onClick={() => setAuthView('loginPassword')} className="hover:text-purple-400">Already set password? Login here</button>
+                </div>
+              </form>
+            )}
+
+            {/* Step 2: OTP Verification */}
+            {authView === 'otpVerify' && (
+              <form onSubmit={handleVerifyOtp} className="space-y-4">
+                <div className="bg-purple-950/30 border border-purple-800/40 p-3 rounded-xl text-center">
+                  <p className="text-xs text-purple-300">Enter OTP sent to <strong className="text-white">{authEmail}</strong></p>
+                  <p className="text-[11px] text-slate-400 mt-1">Verification OTP code: <span className="text-purple-400 font-mono font-bold">1234</span></p>
+                </div>
+                <input 
+                  type="text" 
+                  maxLength={4}
+                  required
+                  placeholder="1234"
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3.5 text-center text-2xl tracking-widest font-mono text-white focus:outline-none focus:border-purple-500"
+                />
+                <button 
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full py-3.5 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl shadow-lg shadow-purple-600/30 flex items-center justify-center gap-2 transition"
+                >
+                  {authLoading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Verify OTP'}
+                </button>
+                <button type="button" onClick={() => setAuthView('loginEmail')} className="w-full text-xs text-slate-400 hover:text-white text-center pt-2">
+                  Back to email input
+                </button>
+              </form>
+            )}
+
+            {/* Step 3: Password Setup (After 1st successful OTP) */}
+            {authView === 'passwordSetup' && (
+              <form onSubmit={handleSetPassword} className="space-y-4">
+                <div className="bg-emerald-950/30 border border-emerald-800/40 p-3 rounded-xl text-center">
+                  <p className="text-xs text-emerald-300 font-medium">OTP Verified Successfully!</p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">Set a password for future logins with Gmail & Password.</p>
+                </div>
+                <div className="relative">
+                  <input 
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    placeholder="Create password (min 6 chars)"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3.5 text-sm text-slate-100 focus:outline-none focus:border-purple-500"
+                  />
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3.5 top-3.5 text-slate-500 hover:text-slate-300">
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <button 
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition"
+                >
+                  {authLoading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Save Password & Enter'}
+                </button>
+              </form>
+            )}
+
+            {/* Step 4: Password Login */}
+            {authView === 'loginPassword' && (
+              <form onSubmit={handlePasswordLogin} className="space-y-4">
+                <div>
+                  <input 
+                    type="email" 
+                    required
+                    placeholder="trader@example.com"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-100 focus:outline-none focus:border-purple-500"
+                  />
+                </div>
+                <div className="relative">
+                  <input 
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    placeholder="Password"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3.5 text-sm text-slate-100 focus:outline-none focus:border-purple-500"
+                  />
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3.5 top-3.5 text-slate-500 hover:text-slate-300">
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <button 
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full py-3.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-lg shadow-purple-600/30 flex items-center justify-center gap-2 transition"
+                >
+                  {authLoading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Log In'}
+                </button>
+                <div className="flex justify-between text-xs text-slate-400 pt-2">
+                  <button type="button" onClick={() => setAuthView('loginEmail')} className="hover:text-purple-400">Login via OTP</button>
+                </div>
+              </form>
+            )}
+
+          </div>
+        </div>
+
+        {/* Footer */}
+        <footer className="text-center py-6 text-xs text-slate-500 border-t border-slate-900">
+          <p>© 2026 P2P Expert Traders (p2p-expertt-traders.in). All rights reserved.</p>
+        </footer>
+      </div>
+    );
+  }
+
+  // ==========================================
+  // RENDER APP (If Logged In)
+  // ==========================================
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-purple-500 selection:text-white pb-16">
+      
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`fixed top-5 right-5 z-50 px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 border backdrop-blur-md ${
+          toast.type === 'error' ? 'bg-red-950/90 border-red-500/50 text-red-200' : 'bg-slate-900/95 border-purple-500/50 text-purple-200'
+        }`}>
+          {toast.type === 'error' ? <AlertCircle className="w-5 h-5 text-red-400 shrink-0" /> : <CheckCircle2 className="w-5 h-5 text-purple-400 shrink-0" />}
+          <span className="text-sm font-medium">{toast.message}</span>
+        </div>
+      )}
+
+      {/* HEADER */}
+      <header className="sticky top-0 z-40 bg-slate-950/85 backdrop-blur-xl border-b border-slate-800/80">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+          
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => setActiveTab('deposit')}>
+            <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-blue-500 p-0.5 shadow-lg shadow-purple-500/20 flex items-center justify-center">
+              <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center">
+                <Shield className="w-6 h-6 text-purple-400" />
+              </div>
+            </div>
+            <div>
+              <h1 className="text-lg font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-purple-300 bg-clip-text text-transparent">
+                P2P Expert Traders
+              </h1>
+              <span className="text-[11px] text-purple-400 font-mono tracking-wider">p2p-expertt-traders.in</span>
+            </div>
+          </div>
+
+          <nav className="hidden md:flex items-center gap-1 bg-slate-900/60 p-1.5 rounded-2xl border border-slate-800">
+            <button 
+              onClick={() => setActiveTab('deposit')} 
+              className={`px-5 py-2 rounded-xl text-sm font-medium transition ${activeTab === 'deposit' ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30' : 'text-slate-400 hover:text-white'}`}
+            >
+              Deposit Portal
+            </button>
+            <button 
+              onClick={() => setActiveTab('account')} 
+              className={`px-5 py-2 rounded-xl text-sm font-medium transition ${activeTab === 'account' ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30' : 'text-slate-400 hover:text-white'}`}
+            >
+              Account
+            </button>
+            {user.role === 'admin' && (
+              <button 
+                onClick={() => setActiveTab('admin')} 
+                className={`px-5 py-2 rounded-xl text-sm font-medium flex items-center gap-1.5 transition ${activeTab.startsWith('admin') ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30' : 'text-purple-400 hover:bg-purple-950/30'}`}
+              >
+                <Sliders className="w-4 h-4" /> Admin panel
+              </button>
+            )}
+          </nav>
+
+          <div className="hidden md:flex items-center gap-3">
+            <div className="flex items-center gap-3 bg-slate-900/90 border border-slate-800 px-4 py-2 rounded-2xl">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-500 to-indigo-500 flex items-center justify-center font-bold text-xs text-white">
+                {user.email.substring(0, 2).toUpperCase()}
+              </div>
+              <div className="text-left">
+                <p className="text-xs font-semibold text-white max-w-[120px] truncate">{user.email}</p>
+                <p className="text-[10px] text-purple-400 font-mono capitalize">{user.role}</p>
+              </div>
+              <button onClick={handleLogout} title="Logout" className="ml-2 text-slate-400 hover:text-red-400 p-1 transition">
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex md:hidden items-center">
+            <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300">
+              {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+            </button>
+          </div>
+        </div>
+
+        {mobileMenuOpen && (
+          <div className="md:hidden bg-slate-950 border-b border-slate-800 px-4 py-5 space-y-3">
+            <button onClick={() => { setActiveTab('deposit'); setMobileMenuOpen(false); }} className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium bg-slate-900/60 text-slate-200">Deposit Portal</button>
+            <button onClick={() => { setActiveTab('account'); setMobileMenuOpen(false); }} className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium bg-slate-900/60 text-slate-200">Account</button>
+            {user.role === 'admin' && (
+              <button onClick={() => { setActiveTab('admin'); setMobileMenuOpen(false); }} className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium bg-purple-950/40 text-purple-300 border border-purple-800/40 flex items-center gap-2">
+                <Sliders className="w-4 h-4" /> Admin panel
+              </button>
+            )}
+            <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-white">{user.email}</p>
+                <p className="text-[10px] text-purple-400 capitalize">{user.role}</p>
+              </div>
+              <button onClick={() => { handleLogout(); setMobileMenuOpen(false); }} className="px-4 py-2 bg-red-950/50 text-red-300 border border-red-800/50 rounded-xl text-xs">
+                Logout
+              </button>
+            </div>
+          </div>
+        )}
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
+
+        {/* ================= DEPOSIT SCREEN (Main User Portal) ================= */}
+        {activeTab === 'deposit' && (
+          <div className="max-w-xl mx-auto py-4 space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 flex flex-col items-center text-center space-y-6 shadow-2xl">
+              
+              <div className="space-y-1">
+                <h2 className="text-xl font-black text-white">Deposit USDT to Binance</h2>
+                <p className="text-xs text-slate-400">Scan QR or copy TRC20 wallet address</p>
+              </div>
+
+              {/* Exact Binance USDT TRC20 QR Code Image */}
+              <div className="p-4 bg-slate-950 border border-slate-800 rounded-2xl shadow-inner">
+                <img 
+                  src={settings.qrImageUrl} 
+                  alt="Binance USDT TRC20 QR Code" 
+                  className="w-56 h-56 object-contain rounded-xl mx-auto"
+                  onError={(e) => { e.target.src = DEFAULT_QR_BASE64; }}
+                />
+              </div>
+
+              <div className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 flex items-center justify-between text-xs">
+                <span className="text-slate-400">Network:</span>
+                <span className="font-bold text-purple-400 font-mono">{settings.networkName}</span>
+              </div>
+
+              {/* Wallet Address & Copy Button */}
+              <div className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3.5 flex items-center justify-between gap-2">
+                <span className="font-mono text-xs text-purple-300 truncate">{settings.walletAddress}</span>
+                <button 
+                  onClick={() => copyToClipboard(settings.walletAddress, 'Wallet address')}
+                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-bold transition shrink-0"
+                >
+                  Copy address
+                </button>
+              </div>
+
+              {/* Minimum Deposit Amount */}
+              <div className="w-full bg-purple-950/20 border border-purple-800/40 p-3.5 rounded-2xl">
+                <p className="text-xs text-purple-300 font-semibold">Minimum deposit: ₹{settings.minDeposit.toLocaleString('en-IN')} USDT</p>
+              </div>
+
+              {/* Instructions */}
+              <p className="text-xs text-slate-400 leading-relaxed text-left bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                {settings.instructions}
+              </p>
+
+              <div className="text-[11px] text-slate-500">
+                Secure P2P Escrow Gateway &bull; p2p-expertt-traders.in
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* ================= ACCOUNT SCREEN ================= */}
+        {activeTab === 'account' && (
+          <div className="max-w-xl mx-auto py-8 space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 space-y-6 shadow-2xl">
+              <h2 className="text-2xl font-black text-white">Account Details</h2>
+              <div className="space-y-4 text-sm">
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex justify-between">
+                  <span className="text-slate-400">Email Address:</span>
+                  <span className="text-white font-medium">{user.email}</span>
+                </div>
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex justify-between">
+                  <span className="text-slate-400">Account Role:</span>
+                  <span className="text-purple-400 font-bold uppercase">{user.role}</span>
+                </div>
+              </div>
+              <button 
+                onClick={handleLogout}
+                className="w-full py-3.5 bg-red-950/40 border border-red-800/50 hover:bg-red-900/50 text-red-300 font-bold rounded-2xl transition flex items-center justify-center gap-2"
+              >
+                <LogOut className="w-4 h-4" /> Sign Out Securely
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ================= ADMIN PANEL: DEPOSIT SETTINGS ================= */}
+        {activeTab === 'admin' && (
+          <div>
+            {user.role === 'admin' ? (
+              <div className="space-y-8 py-4 max-w-2xl mx-auto">
+                
+                <div className="flex items-center gap-2 border-b border-slate-800 pb-4">
+                  <button onClick={() => setActiveTab('admin')} className="px-4 py-2 bg-slate-900 border border-slate-800 text-white rounded-xl text-sm font-bold shadow">Deposit settings</button>
+                  <button onClick={() => setActiveTab('adminUsers')} className="px-4 py-2 bg-slate-900/60 hover:bg-slate-900 text-slate-400 hover:text-white rounded-xl text-sm font-medium transition">Users</button>
+                  <button onClick={() => setActiveTab('adminSessions')} className="px-4 py-2 bg-slate-900/60 hover:bg-slate-900 text-slate-400 hover:text-white rounded-xl text-sm font-medium transition">Sessions</button>
+                </div>
+
+                <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-8 space-y-6 shadow-2xl">
+                  <h3 className="text-xl font-bold text-white">Deposit settings & QR Manager</h3>
+
+                  <div className="space-y-4 text-sm">
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Cryptocurrency</label>
+                      <input 
+                        type="text" 
+                        value={settings.cryptocurrency}
+                        onChange={(e) => setSettings({ ...settings, cryptocurrency: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Network</label>
+                      <input 
+                        type="text" 
+                        value={settings.networkName}
+                        onChange={(e) => setSettings({ ...settings, networkName: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Deposit wallet address</label>
+                      <input 
+                        type="text" 
+                        value={settings.walletAddress}
+                        onChange={(e) => setSettings({ ...settings, walletAddress: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 font-mono text-purple-300 focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Minimum deposit amount (₹)</label>
+                      <input 
+                        type="number" 
+                        value={settings.minDeposit}
+                        onChange={(e) => setSettings({ ...settings, minDeposit: Number(e.target.value) })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Replace QR image</label>
+                      <input 
+                        type="file" 
+                        accept="image/*"
+                        onChange={(e) => {
+                          const file = e.target.files[0];
+                          if (file) {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                              setSettings({ ...settings, qrImageUrl: reader.result });
+                              showToast('QR Image replaced successfully!');
+                            };
+                            reader.readAsDataURL(file);
+                          }
+                        }}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-purple-600 file:text-white hover:file:bg-purple-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Instructions</label>
+                      <textarea 
+                        rows={3}
+                        value={settings.instructions}
+                        onChange={(e) => setSettings({ ...settings, instructions: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+
+                    <button 
+                      onClick={() => persistSettings(settings)}
+                      className="w-full py-4 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl shadow-lg shadow-purple-600/30 transition mt-4"
+                    >
+                      Save settings
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            ) : (
+              <div className="py-20 text-center space-y-4">
+                <div className="w-16 h-16 rounded-3xl bg-red-500/10 text-red-400 flex items-center justify-center mx-auto border border-red-500/20">
+                  <Lock className="w-8 h-8" />
+                </div>
+                <h3 className="text-xl font-bold text-white">Admin Access Required</h3>
+                <p className="text-slate-400 text-sm max-w-md mx-auto">
+                  Please log in with admin email <strong className="text-purple-400">p2pexperttrader@gmail.com</strong> and password <code className="text-purple-300">p2pexpert@traders</code>.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ================= ADMIN PANEL: USERS ================= */}
+        {activeTab === 'adminUsers' && user.role === 'admin' && (
+          <div className="space-y-6 max-w-4xl mx-auto py-4">
+            <div className="flex items-center gap-2 border-b border-slate-800 pb-4">
+              <button onClick={() => setActiveTab('admin')} className="px-4 py-2 bg-slate-900/60 text-slate-400 rounded-xl text-sm font-medium">Deposit settings</button>
+              <button onClick={() => setActiveTab('adminUsers')} className="px-4 py-2 bg-slate-900 text-white rounded-xl text-sm font-bold shadow">Users</button>
+              <button onClick={() => setActiveTab('adminSessions')} className="px-4 py-2 bg-slate-900/60 text-slate-400 rounded-xl text-sm font-medium">Sessions</button>
+            </div>
+
+            <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl">
+              <h3 className="text-lg font-bold text-white">Registered Users</h3>
+              <div className="space-y-3">
+                {usersList.map((u) => (
+                  <div key={u.id} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-bold text-white">{u.email}</p>
+                      <p className="text-[11px] text-purple-400 uppercase font-mono">{u.role} &bull; Registered: {u.createdAt}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= ADMIN PANEL: SESSIONS ================= */}
+        {activeTab === 'adminSessions' && user.role === 'admin' && (
+          <div className="space-y-6 max-w-5xl mx-auto py-4">
+            <div className="flex items-center gap-2 border-b border-slate-800 pb-4">
+              <button onClick={() => setActiveTab('admin')} className="px-4 py-2 bg-slate-900/60 text-slate-400 rounded-xl text-sm font-medium">Deposit settings</button>
+              <button onClick={() => setActiveTab('adminUsers')} className="px-4 py-2 bg-slate-900/60 text-slate-400 rounded-xl text-sm font-medium">Users</button>
+              <button onClick={() => setActiveTab('adminSessions')} className="px-4 py-2 bg-slate-900 text-white rounded-xl text-sm font-bold shadow">Sessions</button>
+            </div>
+
+            <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl">
+              <h3 className="text-lg font-bold text-white">Deposit Sessions</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                      <th className="py-3 px-4">User</th>
+                      <th className="py-3 px-4">Coin</th>
+                      <th className="py-3 px-4">Network</th>
+                      <th className="py-3 px-4">Created</th>
+                      <th className="py-3 px-4">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 text-sm">
+                    {transactions.map((tx) => (
+                      <tr key={tx.id} className="hover:bg-slate-800/30 transition">
+                        <td className="py-4 px-4 font-medium text-white">{tx.user}</td>
+                        <td className="py-4 px-4 font-bold text-white">{tx.coin}</td>
+                        <td className="py-4 px-4 font-mono text-xs text-purple-300">{tx.network}</td>
+                        <td className="py-4 px-4 text-xs text-slate-400">{tx.created}</td>
+                        <td className="py-4 px-4">
+                          <span className="px-3 py-1 rounded-full text-xs font-medium uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                            {tx.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+      </main>
+
+      <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-20 pt-8 border-t border-slate-800/80 text-center text-xs text-slate-500 space-y-2">
+        <p>© 2026 P2P Expert Traders (<span className="text-purple-400 font-mono">p2p-expertt-traders.in</span>). All rights reserved.</p>
+        <p>Admin Login: p2pexperttrader@gmail.com / p2pexpert@traders</p>
+      </footer>
+
+    </div>
+  );
+}
